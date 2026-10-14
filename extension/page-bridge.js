@@ -22,7 +22,17 @@
   const emit = (session, event, payload={}) => window.postMessage({channel:CHANNEL,kind:'event',sessionId:session.id,event,payload},location.origin);
   const isCurrent = session => active === session && !session.closed;
   const pagePlayer = () => document.getElementById('movie_player');
-  const audioEvent = session => emit(session,'audio',{id:session.audio.selectedId,volume:session.audio.volume});
+  const audioEvent = session => emit(session,'audio',{id:session.audio.selectedId,volume:session.audio.volume,page:session.audio.players.has(PAGE)});
+  // YouTube allows one automatically playing player per page: only while no window plays or is starting.
+  const busy = session => [...session.entries.values()].some(entry => entry.pending || entry.state === 1 || entry.state === 3);
+  function pageState() {
+    try {
+      const player = pagePlayer();
+      const data = player?.getVideoData?.();
+      if (data?.video_id) return {videoId:data.video_id,time:Math.floor(player.getCurrentTime() || 0),playing:player.getPlayerState() === 1};
+    } catch {}
+    return null;
+  }
 
   function pausePagePlayer() {
     try { pagePlayer()?.pauseVideo?.(); } catch {}
@@ -41,10 +51,13 @@
     return {mute:()=>player.mute(), unMute:()=>player.unMute(), isMuted:()=>player.isMuted()};
   }
 
-  function setDock(session, dock) {
+  function setDock(session, dock, announce) {
     session.dock = dock === 'right' ? 'right' : 'main';
     const player = pagePlayer();
     if (session.dock === 'main') {
+      // The page video moves into the panel from the same moment.
+      const resume = announce && location.pathname === '/watch' ? pageState() : null;
+      if (resume) emit(session,'resume',resume);
       pausePagePlayer();
       if (session.audio.players.has(PAGE)) {
         session.audio.remove(PAGE);
@@ -101,7 +114,7 @@
   /** video is already normalized by normalizeSession: valid videoId and startSeconds. */
   async function addVideo(session,video,autoplay) {
     if (!isCurrent(session) || session.entries.has(video.id) || session.entries.size >= MAX_VIDEOS) return;
-    const entry = {video,player:null,ready:false,timer:null};
+    const entry = {video,player:null,ready:false,timer:null,state:-1,pending:autoplay && !busy(session),failed:false};
     session.entries.set(video.id,entry);
     try {
       await loadApi();
@@ -117,7 +130,7 @@
       source.searchParams.set('mv_client',clientId);
       source.searchParams.set('enablejsapi','1');
       source.searchParams.set('origin',location.origin);
-      source.searchParams.set('autoplay',autoplay ? '1' : '0');
+      source.searchParams.set('autoplay',entry.pending ? '1' : '0');
       source.searchParams.set('playsinline','1');
       if(video.startSeconds) source.searchParams.set('start',String(video.startSeconds));
       frame.src = source.href;
@@ -134,9 +147,13 @@
             audioEvent(session);
           },
           onStateChange: event=>{
+            entry.state = event.data;
+            if (event.data !== -1 && event.data !== 5) entry.pending = false;
             if(isCurrent(session) && session.entries.get(video.id)===entry) emit(session,'state',{id:video.id,state:event.data});
           },
           onError: event=>{
+            entry.pending = false;
+            entry.failed = true;
             if(!isCurrent(session) || session.entries.get(video.id)!==entry) return;
             clearTimeout(entry.timer);
             // Keep the failed player in the coordinator so the periodic check keeps it muted.
@@ -145,14 +162,18 @@
             audioEvent(session);
           },
           onAutoplayBlocked: ()=>{
+            entry.pending = false;
             if(isCurrent(session)) emit(session,'state',{id:video.id,state:'blocked'});
           }
         }
       });
       entry.timer=setTimeout(()=>{
+        entry.pending = false;
         if(isCurrent(session) && !entry.ready && session.entries.get(video.id)===entry) emit(session,'error',{id:video.id,code:'timeout',message:'The player did not answer. Check the connection and add the video again.'});
       },25000);
     } catch(error) {
+      entry.pending = false;
+      entry.failed = true;
       if(isCurrent(session)) emit(session,'error',{id:video.id,code:'api',message:error.message});
     }
   }
@@ -175,17 +196,17 @@
     const normalized = normalizeSession(payload);
     const session = active = {id,closed:false,entries:new Map(),audio:new AudioCoordinator(normalized.volume),dock:'main',pageWasMuted:null};
     // The video the user was watching continues from the same moment inside the panel.
-    let resume = null;
-    try {
-      const player = pagePlayer();
-      const data = player?.getVideoData?.();
-      if (data?.video_id) resume = {videoId:data.video_id,time:Math.floor(player.getCurrentTime() || 0),playing:player.getPlayerState() === 1};
-    } catch {}
-    setDock(session,normalized.dock);
+    const resume = pageState();
+    setDock(session,normalized.dock,false);
     session.tick=setInterval(()=>{
       if(!isCurrent(session)) return;
       if(!document.getElementById('yt-multiview-root')) { stop(session); return; }
+      const before = session.audio.selectedId;
+      const hadPage = session.audio.players.has(PAGE);
+      // A page player that appears later (back to a watch page) joins as a sound source.
+      if (session.dock === 'right' && !hadPage) setDock(session,'right',false);
       session.audio.reconcile();
+      if (session.audio.selectedId !== before || session.audio.players.has(PAGE) !== hadPage) audioEvent(session);
     },250);
     for (const video of normalized.videos) {
       const continued = session.dock === 'main' && resume?.videoId === video.videoId;
@@ -219,18 +240,20 @@
           audioEvent(session);
           break;
         }
-        case 'select':
-          if(payload.id===PAGE ? !session.audio.players.has(PAGE) : payload.id!==null && !session.entries.get(payload.id)?.ready) return;
+        case 'select': {
+          const entry = session.entries.get(payload.id);
+          if(payload.id===PAGE ? !session.audio.players.has(PAGE) : payload.id!==null && (!entry?.ready || entry.failed)) return;
           session.audio.select(payload.id);
           audioEvent(session);
           break;
+        }
         case 'volume':
           if(typeof payload.volume!=='number' || !Number.isFinite(payload.volume)) return;
           session.audio.setVolume(payload.volume);
           audioEvent(session);
           break;
         case 'dock':
-          setDock(session,payload.dock);
+          setDock(session,payload.dock,true);
           audioEvent(session);
           break;
         case 'stop': stop(session); break;

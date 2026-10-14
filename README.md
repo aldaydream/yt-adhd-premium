@@ -17,7 +17,7 @@ In the browser it shows up as **ADHD MultiView**. Made with Claude Cowork and Cl
 - The panel sits where the YouTube player and comments were. The feed on the right keeps scrolling.
 - Click a video in the feed and it lands in the panel. Ctrl+click and the middle button still open a tab.
 - 1 to 4 windows, 11 layouts in the Windows snap spirit. Drag a window by its ⠿ handle onto another one to swap them.
-- One sound at a time. Add a video while another one plays and a small prompt asks which sound stays.
+- One sound at a time. Add a video while another one plays and a small prompt asks which sound stays. The players' own mute buttons count too: unmute a window there and it becomes the sound.
 - The ▴ under a window opens its title and channel. That video shrinks a bit to make room.
 - **Right** moves the windows into the recommendations column and gives the YouTube player back. It becomes one more sound source.
 - On the home page or in search the panel floats in the top right corner.
@@ -47,7 +47,7 @@ No server, no analytics. Videos come from `youtube-nocookie.com` through the off
 
 ## YouTube's rules
 
-Every window is YouTube's own embedded player with its controls and branding, at least 200×200 px, with nothing drawn on top of it. Only one window starts by itself at a time, restored sets never autoplay, sound goes through the documented `mute()` / `unMute()` / `setVolume()` calls. Closing the panel removes every player.
+Every window is YouTube's own embedded player with its controls and branding, at least 200×200 px, with nothing drawn on top of it. Only one window starts by itself at a time, restored sets never autoplay, sound goes through the documented `mute()` / `unMute()` / `setVolume()` calls, and the players' own controls keep working. Closing the panel removes every player.
 
 One gap I know about: with the panel open, the extension reshapes youtube.com (hides the player and comments, or the recommendations) and turns feed clicks into "add". YouTube's [Developer Policies](https://developers.google.com/youtube/terms/developer-policies) ask API clients to leave YouTube's own interface alone without approval. So this is a personal tool, and it is not in any extension store. Not legal advice.
 

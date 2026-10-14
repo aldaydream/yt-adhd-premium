@@ -44,8 +44,9 @@ const page = (body, script = '') => `<!doctype html><html dark><head><meta chars
   ytd-miniplayer{position:fixed;right:12px;bottom:12px;width:400px;height:225px;background:#665500;z-index:2030}
 </style></head><body><div id="masthead-container">Mock YouTube</div>${body}<script>${script}</script></body></html>`;
 
+// The last feed item carries a button inside its link, like YouTube's "Watch later" on thumbnails.
 const feed = id => IDS.filter(other => other !== id).map(other =>
-  `<a class="item" href="/watch?v=${other}"><div class="thumb"></div><span>Feed video ${other}</span></a>`).join('');
+  `<a class="item" href="/watch?v=${other}"><div class="thumb">${other === IDS[4] ? '<button class="later" onclick="event.preventDefault();window.__later=(window.__later||0)+1">Later</button>' : ''}</div><span>Feed video ${other}</span></a>`).join('');
 
 const watchPage = id => page(`<ytd-app><ytd-watch-flexy is-two-columns_><div id="columns">
   <div id="primary"><div id="primary-inner"><div id="player"><div id="movie_player">PAGE PLAYER ${id}<video></video></div></div>
@@ -64,6 +65,7 @@ const MOCK_API = `window.__mockPlayers={};window.__created=0;
 window.YT={Player:class{constructor(frame,options){const url=new URL(frame.src);this.frame=frame;this.events=options.events;
 this.videoId=url.pathname.split('/').pop();this.url=url;this.muted=false;this.volume=100;this.state=-1;window.__created+=1;
 window.__mockPlayers[frame.dataset.mvId]=this;setTimeout(()=>{this.events.onReady({target:this});
+if(this.videoId==='failedVideo'){this.events.onError({target:this,data:150});return;}
 if(url.searchParams.get('autoplay')==='1')this.setState(1);},150);}
 setState(s){this.state=s;this.events.onStateChange&&this.events.onStateChange({target:this,data:s});}
 mute(){this.muted=true}unMute(){this.muted=false}isMuted(){return this.muted}setVolume(v){this.volume=v}
@@ -164,16 +166,20 @@ function serve() {
     pass('feed click adds a window without navigation; chooser switches the audio; second video waits for Play');
 
     // 3. A link to a video already in the panel is not added twice and does not navigate.
-    // The panel covers the hidden comments column, so the link is clicked from script.
-    await tab.evaluate(() => document.getElementById('chapter').click());
+    await tab.click(`#secondary a[href="/watch?v=${IDS[1]}"] span`);
     assert.equal(tab.url(), url);
     assert.equal(await cards().count(), 2);
     assert.match(await tab.locator('#yt-multiview-root .notice').textContent(), /already in the panel/);
-    pass('duplicate link shows a notice');
+    // A button inside a video link keeps its own action.
+    await tab.click('#secondary .later');
+    assert.equal(await inPanel(() => window.__later), 1);
+    assert.equal(await cards().count(), 2);
+    assert.equal(tab.url(), url);
+    pass('duplicate link shows a notice; buttons inside video links keep working');
 
     // 4. Fill four windows, choose layouts, reject a fifth video.
     for (const other of IDS.slice(2, 4)) {
-      await tab.click(`#secondary a[href="/watch?v=${other}"]`);
+      await tab.click(`#secondary a[href="/watch?v=${other}"] span`);
       await tab.locator('#yt-multiview-root .chooser button', {hasText: 'Keep'}).click();
     }
     await waitReady(4);
@@ -184,7 +190,7 @@ function serve() {
     const areas = await inPanel(() => document.getElementById('yt-multiview-root').shadowRoot.querySelector('.grid').style.gridTemplateAreas);
     assert.equal(areas, '"a a a" "b c d"');
     await tab.screenshot({path: path.join(OUT, '04-main-top-wide.png')});
-    await tab.click(`#secondary a[href="/watch?v=${IDS[4]}"]`);
+    await tab.click(`#secondary a[href="/watch?v=${IDS[4]}"] span`);
     assert.equal(await cards().count(), 4);
     assert.match(await tab.locator('#yt-multiview-root .notice').textContent(), /All four windows/);
     pass('four windows, layout presets, fifth video rejected', {areas});
@@ -245,14 +251,45 @@ function serve() {
     assert.deepEqual(await audible(), []);
     await tab.screenshot({path: path.join(OUT, '06-right.png')});
     pass('right dock keeps the YouTube player and comments, main video audio works', right);
+    // Theater mode puts a full-width player above the columns: the panel starts below it and follows on scroll.
+    const theater = async () => inPanel(() => [Math.round(document.getElementById('yt-multiview-root').getBoundingClientRect().top),
+      Math.round(document.getElementById('secondary-inner').getBoundingClientRect().top)]);
+    await tab.evaluate(() => { document.getElementById('columns').style.marginTop = '300px'; });
+    await tab.waitForTimeout(400);
+    const [panelTop, columnTop] = await theater();
+    assert.equal(panelTop, columnTop);
+    await tab.mouse.wheel(0, 200);
+    await tab.waitForTimeout(200);
+    const [scrolledTop, scrolledColumn] = await theater();
+    assert.equal(scrolledTop, Math.max(68, scrolledColumn));
+    await tab.evaluate(() => { window.scrollTo(0, 0); document.getElementById('columns').style.marginTop = ''; });
+    pass('right dock starts below a theater-mode player and follows the scroll', {panelTop, scrolledTop});
 
-    // 8. Volume and mute all.
+    // 8. A player's own unmute button makes it the source; volume and mute all.
+    await tab.waitForTimeout(1600);
+    await tab.evaluate(id => { Object.values(window.__mockPlayers).find(p => !p.destroyed && p.videoId === id).muted = false; }, IDS[2]);
+    await tab.waitForFunction(() => document.getElementById('movie_player').isMuted(), null, {timeout: 4000});
+    assert.deepEqual(await audible(), [IDS[2]]);
+    assert.equal(await tab.locator('#yt-multiview-root .card[data-selected=true] .title').textContent(), `Title ${IDS[2]}`);
+    pass('unmuting inside a player makes it the sound source');
     await tab.locator('#yt-multiview-root input[type=range]').fill('35');
     assert.ok(await inPanel(() => Object.values(window.__mockPlayers).filter(p => !p.destroyed).every(p => p.volume === 35)));
     await tab.locator('#yt-multiview-root button[aria-label="Mute all"]').click();
-    await tab.waitForFunction(() => document.getElementById('movie_player').isMuted());
+    await tab.waitForFunction(() => Object.values(window.__mockPlayers).every(p => p.destroyed || p.muted));
     assert.deepEqual(await audible(), []);
     pass('volume reaches every player; mute all silences tiles and the page player');
+
+    // 8b. Back to Main: the page video moves into the panel again, from the page player's time.
+    await tab.locator(`#yt-multiview-root .card:has(.title:text-is("Title ${IDS[0]}")) .remove`).click();
+    assert.equal(await cards().count(), 3);
+    const beforeMain = embeds.length;
+    await tab.locator('#yt-multiview-root .seg button', {hasText: 'Main'}).click();
+    await waitReady(4);
+    assert.equal(await inPanel(() => document.documentElement.dataset.mvPlace), 'main');
+    const resumed = new URL(embeds[beforeMain].url);
+    assert.deepEqual([resumed.pathname, resumed.searchParams.get('start')], [`/embed/${IDS[0]}`, '42']);
+    pass('switching Right to Main brings the page video back at its time');
+    const saved = await order();
 
     // 9. Close restores the page and releases the network rule.
     await tab.locator('#yt-multiview-root button[aria-label="Close MultiView"]').click();
@@ -268,15 +305,20 @@ function serve() {
     const embedCount = embeds.length;
     await toggle();
     await waitReady(4);
-    assert.equal(await inPanel(() => document.documentElement.dataset.mvPlace), 'right');
+    assert.equal(await inPanel(() => document.documentElement.dataset.mvPlace), 'main');
     assert.ok(embeds.slice(embedCount).every(e => new URL(e.url).searchParams.get('autoplay') === '0'));
-    assert.deepEqual(await order(), dragged);
+    assert.deepEqual(await order(), saved);
     pass('reopen restores order and dock without autoplay');
-    await tab.locator('#yt-multiview-root .seg button', {hasText: 'Main'}).click();
-    await tab.waitForFunction(() => document.documentElement.dataset.mvPlace === 'main');
     await tab.setViewportSize({width: 1920, height: 1080});
     await tab.waitForTimeout(500);
     await tab.screenshot({path: path.join(OUT, '07-main-1920.png')});
+    // Single-column watch page: the panel floats and the page player it would cover stays hidden.
+    await tab.evaluate(() => document.querySelector('ytd-watch-flexy').removeAttribute('is-two-columns_'));
+    await tab.waitForFunction(() => document.documentElement.dataset.mvPlace === 'float');
+    assert.equal(await inPanel(() => getComputedStyle(document.getElementById('player')).visibility), 'hidden');
+    await tab.evaluate(() => document.querySelector('ytd-watch-flexy').setAttribute('is-two-columns_', ''));
+    await tab.waitForFunction(() => document.documentElement.dataset.mvPlace === 'main');
+    pass('single-column layout floats the panel and keeps the paused page player hidden');
     await toggle();
 
     // 11. Any other YouTube page: a floating panel; navigation away from YouTube links still works.
@@ -286,8 +328,29 @@ function serve() {
     await waitReady(4);
     assert.equal(await inPanel(() => document.documentElement.dataset.mvPlace), 'float');
     await tab.screenshot({path: path.join(OUT, '08-float-home.png')});
-    await tab.click('a[href="/watch?v=jNQXAC9IVRw"]', {modifiers: ['Shift']}).catch(() => {});
     pass('home page shows the floating panel');
+
+    // 11b. Two quick clicks: only one new window may start by itself.
+    for (const id of [IDS[2], IDS[3]]) await tab.locator(`#yt-multiview-root .card:has(.title:text-is("Title ${id}")) .remove`).click();
+    const beforeRace = embeds.length;
+    await tab.click(`a[href="/watch?v=${IDS[2]}"] span`);
+    await tab.click(`a[href="/watch?v=${IDS[4]}"] span`);
+    await waitReady(4);
+    const flags = embeds.slice(beforeRace).map(e => new URL(e.url).searchParams.get('autoplay'));
+    assert.deepEqual(flags.sort(), ['0', '1']);
+    pass('rapid clicks start only one window by itself', flags);
+
+    // 11c. A window that fails never takes the audio.
+    await tab.locator('#yt-multiview-root .chooser button', {hasText: 'Keep'}).click().catch(() => {});
+    await tab.waitForFunction(() => Object.values(window.__mockPlayers).some(p => !p.destroyed && !p.muted));
+    await tab.locator(`#yt-multiview-root .card:has(.title:text-is("Title ${IDS[4]}")) .remove`).click();
+    await tab.locator('#yt-multiview-root input[type=url]').fill('https://youtu.be/failedVideo');
+    await tab.locator('#yt-multiview-root button[type=submit]').click();
+    await tab.locator('#yt-multiview-root .card-error:visible').waitFor();
+    assert.equal(await tab.locator('#yt-multiview-root .chooser').isVisible(), false);
+    assert.equal(await tab.locator('#yt-multiview-root .card:has(.card-error:visible) .audio').isDisabled(), true);
+    assert.equal((await audible()).includes('failedVideo'), false);
+    pass('failed window shows its error and cannot take the audio');
 
     // 12. Light theme follows YouTube.
     await tab.evaluate(() => document.documentElement.removeAttribute('dark'));

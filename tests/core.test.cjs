@@ -259,3 +259,28 @@ test("dock and per-count layouts are restored only when valid", () => {
   assert.equal(normalizeSession({ dock: "left" }).dock, "main");
   assert.deepEqual(normalizeSession({ layouts: "grid" }).layouts, {});
 });
+
+test("the players' own sound controls win once commands have settled", () => {
+  let now = 0;
+  const calls = [];
+  const a = mockPlayer("a", calls);
+  const b = mockPlayer("b", calls);
+  const audio = new AudioCoordinator(70, () => now);
+  audio.add("a", a);
+  audio.add("b", b);
+  audio.select("a");
+  b.muted = false;
+  audio.reconcile();
+  assert.equal(audio.selectedId, "a", "a stale report right after our command is corrected");
+  assert.equal(b.muted, true);
+  now = 2000;
+  b.muted = false;
+  audio.reconcile();
+  assert.equal(audio.selectedId, "b", "a manual unmute picks that player");
+  assert.deepEqual([a.muted, b.muted], [true, false]);
+  now = 4000;
+  b.muted = true;
+  audio.reconcile();
+  assert.equal(audio.selectedId, null, "a manual mute of the source means silence");
+  assert.deepEqual([a.muted, b.muted], [true, true]);
+});

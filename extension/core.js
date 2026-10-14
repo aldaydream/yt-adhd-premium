@@ -166,13 +166,23 @@
   }
 
   /** Coordinates ready IFrame API players. It never starts, pauses or seeks them. */
+  // How long a player's reported mute state may lag behind our own mute() or unMute() call.
+  const SETTLE_MS = 1500;
+
   class AudioCoordinator {
-    constructor(volume = 70) {
+    constructor(volume = 70, now = () => Date.now()) {
       this.selectedId = null;
       this.volume = volumeOr(volume, 70);
       this.players = new Map();
       this._revision = 0;
       this._destroyed = false;
+      this._now = now;
+      this._touched = new Map();
+    }
+
+    _set(player, method) {
+      this._touched.set(player, this._now());
+      return this._call(player, method).ok;
     }
 
     _call(player, method, argument) {
@@ -187,7 +197,7 @@
     _mute(player, force) {
       const state = this._call(player, "isMuted");
       if (!force && state.ok && state.value === true) return true;
-      return this._call(player, "mute").ok;
+      return this._set(player, "mute");
     }
 
     add(id, player) {
@@ -204,6 +214,7 @@
       const player = this.players.get(id);
       if (player) this._mute(player, true);
       this.players.delete(id);
+      this._touched.delete(player);
       if (this.selectedId === id) this.selectedId = null;
       this._revision += 1;
       return this.reconcile();
@@ -244,10 +255,22 @@
       const state = this._call(target, "isMuted");
       if (revision !== this._revision || this._destroyed) return false;
       if (!forceMute && state.ok && state.value === false) return true;
-      return this._call(target, "unMute").ok;
+      return this._set(target, "unMute");
     }
 
+    /**
+     * Periodic check. The players' own sound controls win once our last command has settled:
+     * unmuting a window in its player makes it the sound source, muting the source means silence.
+     */
     reconcile() {
+      if (this._destroyed) return false;
+      for (const [id, player] of this.players) {
+        if (this._now() - (this._touched.get(player) || 0) < SETTLE_MS) continue;
+        const state = this._call(player, "isMuted");
+        if (!state.ok) continue;
+        if (id === this.selectedId && state.value === true) return this.select(null);
+        if (id !== this.selectedId && state.value === false) return this.select(id);
+      }
       return this._reconcile(false);
     }
 
@@ -257,6 +280,7 @@
       this.selectedId = null;
       for (const player of this.players.values()) this._mute(player, true);
       this.players.clear();
+      this._touched.clear();
     }
   }
 

@@ -30,9 +30,9 @@
   // comments column, the recommendations column keeps scrolling. Right dock: the panel takes the
   // recommendations column, YouTube's player and comments stay.
   const PAGE_CSS = `
-    html[data-mv-place="main"] ytd-watch-flexy #player { visibility: hidden !important; }
-    html[data-mv-place="main"] ytd-watch-flexy #full-bleed-container,
-    html[data-mv-place="main"] ytd-watch-flexy #player-full-bleed-container,
+    html[data-mv-dock="main"] ytd-watch-flexy #player { visibility: hidden !important; }
+    html[data-mv-dock="main"] ytd-watch-flexy #full-bleed-container,
+    html[data-mv-dock="main"] ytd-watch-flexy #player-full-bleed-container,
     html[data-mv-place="main"] ytd-watch-flexy #below { display: none !important; }
     html[data-mv-dock="main"] ytd-miniplayer { display: none !important; }
     html[data-mv-place="right"] ytd-watch-flexy #secondary-inner { visibility: hidden !important; }
@@ -90,7 +90,7 @@
     .card { display: flex; flex-direction: column; min-width: 0; overflow: hidden; background: var(--card); border: 1px solid var(--line); border-radius: 10px; }
     .card[data-selected=true] { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
     .card.drop { outline: 2px dashed var(--accent); outline-offset: 2px; }
-    .player { position: relative; flex: 1 1 auto; min-height: 200px; background: #000; }
+    .player { position: relative; flex: 1 1 auto; min-width: 200px; min-height: 200px; background: #000; }
     .player iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
     .strip { display: flex; align-items: center; gap: 2px; height: 32px; padding: 0 4px; flex: none; }
     .strip .icon { width: 28px; height: 28px; }
@@ -118,7 +118,7 @@
     .chooser button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .chooser small { flex-basis: 100%; color: var(--muted); }
     .only-right { display: none; }
-    :host([data-dock="right"]) .only-right { display: inline-flex; }
+    :host([data-dock="right"][data-page="yes"]) .only-right { display: inline-flex; }
     /* The narrow right column and the floating panel stack windows in one scrolling column. */
     :host(:not([data-place="main"])) .grid { display: flex; flex-direction: column; height: auto; }
     :host(:not([data-place="main"])) .player { flex: none; aspect-ratio: 16 / 9; }
@@ -129,6 +129,8 @@
     .seg button[aria-pressed=true]:hover, .layout[aria-pressed=true]:hover, .btn[aria-pressed=true]:hover:enabled { background: var(--accent); filter: brightness(1.08); }
     .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
     :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    /* Focus rings in a window strip stay inside the strip, clear of the player above it. */
+    .strip :focus-visible { outline-offset: -2px; }
     [hidden] { display: none !important; }
     @media (prefers-reduced-motion: reduce) { .more svg { transition: none; } }
   `;
@@ -220,11 +222,18 @@
     if (location.pathname === "/watch" && flexy && !flexy.hidden && flexy.hasAttribute("is-two-columns_")) {
       const anchor = document.querySelector(session.dock === "right" ? "ytd-watch-flexy #secondary-inner" : "ytd-watch-flexy #primary-inner");
       const box = anchor?.getBoundingClientRect();
-      if (box && box.width >= 240) return { mode: session.dock, left: Math.round(box.left), top, width: Math.round(box.width), height };
+      if (box && box.width >= 240) {
+        // The panel starts where its column starts (below a theater-mode player) and sticks under the masthead.
+        const columnTop = Math.max(top, Math.round(box.top));
+        return { mode: session.dock, left: Math.round(box.left), top: columnTop, width: Math.round(box.width), height: Math.max(260, innerHeight - columnTop - GAP) };
+      }
     }
-    // Any other page, or a single-column watch page: a floating panel over the top right of the page.
+    // Any other page, or a single-column watch page: a floating panel over the top right of the page,
+    // kept above YouTube's miniplayer.
+    const mini = document.querySelector("ytd-miniplayer")?.getBoundingClientRect();
+    const bottom = mini && mini.width > 0 && mini.height > 0 ? Math.min(innerHeight, mini.top) - GAP : innerHeight - GAP;
     const width = Math.round(Math.min(640, Math.max(360, viewWidth * 0.42)));
-    return { mode: "float", left: Math.max(0, viewWidth - width - GAP), top, width, height: Math.round(Math.min(height, width * 0.85)) };
+    return { mode: "float", left: Math.max(0, viewWidth - width - GAP), top, width, height: Math.round(Math.max(260, Math.min(bottom - top, width * 0.85))) };
   }
 
   function place(session) {
@@ -251,6 +260,7 @@
     active = null;
     clearInterval(session.placeTimer);
     clearTimeout(session.noticeTimer);
+    window.removeEventListener("scroll", session.onScroll);
     if (sendStop) postCommand(session, "stop", {});
     session.root.remove();
     setPageAttribute("mvPlace", null);
@@ -305,7 +315,7 @@
     } else {
       // Every embedded player keeps a viewport of at least 200x200. When the panel is too small, it scrolls.
       grid.style.gridTemplateAreas = layout.areas;
-      grid.style.gridTemplateColumns = layout.cols.split(" ").map(size => `minmax(200px, ${size})`).join(" ");
+      grid.style.gridTemplateColumns = layout.cols.split(" ").map(size => `minmax(202px, ${size})`).join(" ");
       grid.style.gridTemplateRows = layout.rows.split(" ").map(size => `minmax(min-content, ${size})`).join(" ");
     }
     session.videos.forEach((video, index) => {
@@ -347,7 +357,7 @@
   function selectAudio(session, id) {
     if (!currentSession(session)) return;
     const card = session.cards.get(id);
-    if (id !== null && id !== PAGE && !card) return;
+    if (id !== null && id !== PAGE && (!card || card.failed)) return;
     if (card && !card.ready) { session.autoAudio = id; return; }
     postCommand(session, "select", { id });
   }
@@ -356,6 +366,7 @@
     session.chooserFor = video.id;
     session.chooser.hidden = false;
     updateChooser(session);
+    session.chooserKeep.focus({ preventScroll: true });
   }
 
   function hideChooser(session) {
@@ -451,7 +462,7 @@
     details.append(fullTitle, channel, meta, error);
 
     cardElement.append(player, strip, details);
-    const card = { element: cardElement, title, fullTitle, channel, titleKnown: false, iframe, state, audio, more, handle, remove, details, error, ready: false, playing: false };
+    const card = { element: cardElement, title, fullTitle, channel, titleKnown: false, iframe, state, audio, more, handle, remove, details, error, ready: false, failed: false };
     session.cards.set(video.id, card);
     session.grid.append(cardElement);
 
@@ -514,15 +525,13 @@
       return false;
     }
     const video = { id: "mv-" + crypto.randomUUID(), ...parsed };
-    const someoneAudible = session.selectedId !== null;
-    // YouTube allows only one automatically playing player per page: a new video starts by itself
-    // only while no other window is playing. Otherwise it waits for ▶ in its player.
-    const startNow = autoplay && ![...session.cards.values()].some(card => card.playing);
+    const someoneAudible = session.selectedId !== null || session.autoAudio !== null;
     session.videos.push(video);
     const card = createCard(session, video);
     applyLayout(session);
     revealCard(session, card);
-    postCommand(session, "add", { video, autoplay: startNow });
+    // The bridge starts it only while no other window plays (one automatically playing player per page).
+    postCommand(session, "add", { video, autoplay });
     if (someoneAudible) showChooser(session, video);
     else session.autoAudio = video.id;
     save(session);
@@ -702,6 +711,8 @@
     document.documentElement.append(root);
     place(session);
     session.placeTimer = setInterval(() => place(session), 300);
+    session.onScroll = () => place(session);
+    window.addEventListener("scroll", session.onScroll, { passive: true });
     let saved;
     let storageFailed = false;
     try {
@@ -722,7 +733,7 @@
       else if (session.videos.length < Core.MAX_VIDEOS) session.videos.unshift({ id: "mv-" + crypto.randomUUID(), ...current });
       else setFull = true;
       session.autoAudio = session.videos.find(video => video.videoId === watching)?.id || null;
-    } else if (session.videos.length === 1) session.autoAudio = session.videos[0].id;
+    } else if (session.videos.length === 1 && !(session.dock === "right" && watching)) session.autoAudio = session.videos[0].id;
     for (const video of session.videos) createCard(session, video);
     session.initialized = true;
     session.placeKey = "";
@@ -767,19 +778,22 @@
       case "state":
         if (!card || !PLAYER_STATES.has(payload.state)) return;
         card.state.textContent = PLAYER_STATES.get(payload.state);
-        card.playing = payload.state === 1 || payload.state === 3;
         break;
       case "audio":
         if (payload.id !== null && payload.id !== PAGE && !session.cards.has(payload.id)) return;
         if (typeof payload.volume !== "number" || !Number.isInteger(payload.volume) || payload.volume < 0 || payload.volume > 100) return;
         session.selectedId = payload.id;
         session.volume = payload.volume;
+        session.root.dataset.page = payload.page === true ? "yes" : "no";
         updateAudio(session);
         break;
       case "error":
         if (typeof payload.message !== "string" || !payload.message || payload.message.length > 2048) return;
         if (payload.id !== null && !card) return;
         if (card) {
+          card.ready = false;
+          card.failed = true;
+          if (session.chooserFor === payload.id) hideChooser(session);
           card.audio.disabled = true;
           card.error.textContent = payload.message;
           card.error.hidden = false;
@@ -789,6 +803,14 @@
           if (session.autoAudio === payload.id) session.autoAudio = null;
         } else setNotice(session, payload.message, true);
         break;
+      case "resume": {
+        // Switching to the main position: the page video moves into the panel.
+        if (typeof payload.videoId !== "string" || !Number.isSafeInteger(payload.time) || payload.time < 0) return;
+        let parsed;
+        try { parsed = Core.parseVideoUrl("https://www.youtube.com/watch?v=" + payload.videoId + (payload.time ? "&t=" + payload.time : "")); } catch (_) { return; }
+        if (!session.videos.some(video => video.videoId === parsed.videoId)) addVideo(session, parsed, payload.playing === true);
+        break;
+      }
       case "closed": close(false); break;
       default: break;
     }
@@ -798,15 +820,17 @@
   // Ctrl, Shift, Alt, Cmd and middle clicks keep their usual meaning (new tab, new window).
   window.addEventListener("click", event => {
     const session = active;
-    if (!session || !session.initialized || event.defaultPrevented || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+    if (!session || !session.initialized || !event.isTrusted || event.defaultPrevented || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
     const path = event.composedPath();
     if (path.includes(session.root)) return;
-    const link = path.find(node => node instanceof HTMLAnchorElement && node.href);
-    if (!link) return;
+    const index = path.findIndex(node => node instanceof HTMLAnchorElement && node.href);
+    if (index < 0) return;
+    // Buttons inside a thumbnail (Watch later, Add to queue, preview controls) keep their own action.
+    if (path.slice(0, index).some(node => node instanceof Element && node.matches("button, [role=button], input, select, textarea"))) return;
     let parsed;
-    try { parsed = Core.parseVideoUrl(link.href); } catch (_) { return; }
+    try { parsed = Core.parseVideoUrl(path[index].href); } catch (_) { return; }
     // With the panel on the right, timestamps and chapters of the page's own video keep working.
-    if (session.dock === "right" && session.place === "right" && parsed.videoId === pageVideoId()) return;
+    if (session.dock === "right" && parsed.videoId === pageVideoId()) return;
     event.preventDefault();
     event.stopImmediatePropagation();
     addVideo(session, parsed, true);
