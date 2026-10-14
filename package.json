@@ -1,0 +1,15 @@
+{
+  "name": "yt-adhd-premium",
+  "version": "0.2.0",
+  "private": true,
+  "license": "MIT",
+  "scripts": {
+    "test": "node --test",
+    "check": "node tools/check.cjs",
+    "e2e": "node tools/e2e-mock.cjs",
+    "package": "python tools/package.py"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

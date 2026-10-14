@@ -1,0 +1,36 @@
+{
+  "manifest_version": 3,
+  "name": "ADHD MultiView",
+  "description": "Watch up to four videos in tiled layouts next to the YouTube feed, with one audio source. Works with YouTube. Not affiliated with YouTube or Google.",
+  "version": "0.2.0",
+  "minimum_chrome_version": "110",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA/QgSSHqSUHYi8/POWLp6E2UptpeQ6uwgthdcCD3BVXtjTe+dBML33DjQSEm1Hxi/AzJn58VvmFeSKyRnkG44D8pXKvXrlu5mJqsM0qKNDq3b4HPQxdC9Tnj4Hv5AjDOCbJuZ1AXFL32ElSCQ7o823w9xrqg1OII0CUQcO0fYdqSVgysz2XtLmylXdtbxLd8xEogDpPigqSe3duq/8LF9Qj9WEcYSIIaH8cTlNFOrOPVYKNiqedhoQAJhSRrsl5NkTf1xrfApHLqTlK4jsHPcVKPVyplYk9jfKNPKBJehBgDQlAFzE3eoWaPque7v0NCZNsXehMc8ehdZ87+GO3rQ4QIDAQAB",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "storage",
+    "declarativeNetRequestWithHostAccess"
+  ],
+  "host_permissions": [
+    "https://www.youtube.com/*",
+    "https://www.youtube-nocookie.com/*"
+  ],
+  "action": {
+    "default_title": "ADHD MultiView: open or close the panel",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "background": {
+    "service_worker": "background.js"
+  }
+}
