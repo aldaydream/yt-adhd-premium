@@ -1,7 +1,5 @@
 # yt-adhd-premium
 
-```text
-
 Four YouTube videos at once, right inside YouTube, with one sound. I wanted to keep scrolling the feed with a stream and a lecture running next to it (yes, the name is honest).
 
 In the browser it shows up as **ADHD MultiView**. Made with Claude Cowork and Claude Code.
